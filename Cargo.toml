@@ -1,0 +1,27 @@
+[workspace]
+members = ["crates/srag-core", "crates/srag-common"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Matt Hesketh <matt@matthesketh.pro>"]
+license = "GPL-3.0"
+repository = "https://github.com/wrxck/srag"
+homepage = "https://github.com/wrxck/srag"
+documentation = "https://github.com/wrxck/srag#readme"
+readme = "README.md"
+description = "Semantic code search and RAG for local repositories"
+keywords = ["semantic-search", "rag", "code", "mcp", "embeddings"]
+categories = ["development-tools", "command-line-utilities"]
+rust-version = "1.75"
+
+[workspace.dependencies]
+srag-common = { path = "crates/srag-common" }
+anyhow = "1.0"
+thiserror = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

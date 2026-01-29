@@ -1,0 +1,59 @@
+[project]
+name = "srag-ml"
+version = "0.1.0"
+description = "ML backend for srag - embeddings, reranking, and LLM inference"
+license = "GPL-3.0-only"
+requires-python = ">=3.10"
+authors = [
+    { name = "Matt Hesketh", email = "matt@matthesketh.pro" }
+]
+maintainers = [
+    { name = "Matt Hesketh", email = "matt@matthesketh.pro" }
+]
+keywords = ["embeddings", "llm", "rag", "semantic-search", "reranking"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Text Processing :: Indexing",
+]
+dependencies = [
+    "fastembed",
+    "llama-cpp-python",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "ruff",
+]
+api = [
+    "anthropic",
+    "openai",
+]
+
+[project.urls]
+Homepage = "https://github.com/wrxck/srag"
+Repository = "https://github.com/wrxck/srag"
+Documentation = "https://github.com/wrxck/srag#readme"
+Issues = "https://github.com/wrxck/srag/issues"
+
+[project.scripts]
+srag-ml = "srag_ml.__main__:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]

@@ -1,0 +1,42 @@
+# srag configuration
+# copy to ~/.config/srag/config.toml
+
+# data_dir = "~/.local/share/srag"
+
+[indexing]
+max_file_size_bytes = 1048576
+batch_size = 32
+throttle_ms = 50
+include_dependencies = false
+
+[query]
+top_k = 10
+ef_search = 48
+context_tokens = 2048
+history_turns = 6
+temperature = 0.1
+max_tokens = 1024
+rerank = true
+broad_k = 50
+
+[watcher]
+debounce_ms = 500
+
+[resource]
+nice_level = 10
+llm_idle_timeout_secs = 300
+memory_budget_mb = 2048
+
+# additional glob patterns to ignore (beyond .gitignore)
+# note: dependency dirs (node_modules, vendor, .venv, etc) are excluded separately
+# via include_dependencies setting above
+ignore_patterns = [
+    "*.lock",
+    "*.min.js",
+    "*.min.css",
+    "*.map",
+    "*.wasm",
+    "*.pyc",
+    ".git",
+    "dist",
+]

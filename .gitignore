@@ -1,0 +1,50 @@
+# Rust
+/target/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+*.egg
+.venv/
+venv/
+.pytest_cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+*.db
+*.db-shm
+*.db-wal
+/data/
+*.gguf
+*.log
+
+# Secrets
+.env
+.env.*
+!.env.example
+api_key.txt
+
+# Coverage
+htmlcov/
+.coverage
+*.lcov
+tarpaulin-report.html
+
+# Editor backups
+*~
+*.bak
+*.orig
+
+# Claude Code
+.claude/

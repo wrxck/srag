@@ -1,0 +1,62 @@
+[package]
+name = "srag-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+readme.workspace = true
+description.workspace = true
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "srag"
+path = "src/main.rs"
+
+[dependencies]
+srag-common.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+clap = { version = "4.5", features = ["derive"] }
+rustyline = "15.0"
+rusqlite = { version = "0.32", features = ["bundled"] }
+toml = "0.8"
+blake3 = "1.5"
+ignore = "0.4"
+notify = "7.0"
+notify-debouncer-full = "0.4"
+dirs = "6.0"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.11", features = ["v4"] }
+byteorder = "1.5"
+tree-sitter = "0.24"
+tree-sitter-rust = "0.23"
+tree-sitter-python = "0.23"
+tree-sitter-javascript = "0.23"
+tree-sitter-typescript = "0.23"
+tree-sitter-go = "0.23"
+tree-sitter-c = "0.23"
+tree-sitter-cpp = "0.23"
+tree-sitter-java = "0.23"
+tree-sitter-ruby = "0.23"
+hnsw_rs = "0.3"
+dialoguer = "0.11"
+rmcp = { version = "0.14", features = ["server", "macros", "transport-io"] }
+rpassword = "7.3"
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29", features = ["signal", "process"] }
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3.14"
