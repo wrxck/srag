@@ -117,6 +117,11 @@ fi
 ok "build"
 
 echo ""; echo "Installing binary..."
+if [ -f "$BIN_DIR/srag" ] && pgrep -x srag >/dev/null 2>&1; then
+    echo "Stopping running srag processes..."
+    pkill -x srag 2>/dev/null || true
+    sleep 1
+fi
 if [ "$OS_TYPE" = "macos" ]; then
     sudo cp "$SCRIPT_DIR/target/release/srag" "$BIN_DIR/srag" || { INSTALL_FAILED=true; error "sudo cp failed"; exit 1; }
     sudo chmod +x "$BIN_DIR/srag"

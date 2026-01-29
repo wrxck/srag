@@ -1,16 +1,40 @@
 # srag
 
-Local code repository semantic search and RAG allowing you or agents to have full semantic understanding of all your past projects (can be indexed individually or all at once) via MCP, with the ability to query and infer code standards, working patterns, previous fixes to similar problems, and more.
+Semantic code search across all your repositories. Index your projects once, then query them via MCP - your AI coding assistant gains instant access to every pattern, implementation, and convention you've ever written.
 
-Here's a few use cases, but really this scales with your creativity:
+## Why?
 
-> You're creating a nextJS app, you're integrating Gmail support but you're not sure how to handle OAuth token refresh properly.
+AI coding assistants are great at writing code, but they don't know *your* code. They'll suggest a new auth flow when you already have one. They'll invent a logging pattern when yours is right there. They'll ask questions you've already answered in another project.
 
-> Instead of having Claude Code research the documentation, it just queries your previous implementation of it via MCP.
+srag fixes this. Index your repositories, and your assistant can search across all of them semantically - finding relevant implementations, patterns, and conventions without you having to explain anything.
 
-> Not only has it now provided all of the info you need, but also the location of the source code. The agent runs `cat` on this file, and suddenly it can see you previously added XSS protection and form validation - so it copies this established pattern.
+## Use Cases
 
-For me personally, and of course it's early days as I'm refining this project, I've noticed that having all my repos indexed means I rarely have to explain context to Claude Code anymore - it just finds the relevant patterns itself.
+**Reuse your own implementations**
+> "Add OAuth token refresh" → Agent finds your existing implementation across projects, copies the pattern including the edge cases you already handled
+
+**Consistent code style**
+> Agent queries `get_project_patterns` before writing code, sees you use `snake_case` for functions and `PascalCase` for types, follows suit automatically
+
+**Find that thing you wrote**
+> "How did I handle rate limiting?" → Semantic search finds the relevant code even if you don't remember which project or what you called it
+
+**Cross-project knowledge**
+> Working on project A, need to integrate with an API you've used before in project B → Agent finds your previous integration, reuses the error handling and retry logic
+
+**Debug with context**
+> "Why is this failing?" → Agent searches for similar error handling patterns in your codebase, finds how you solved the same class of problem before
+
+**Onboard yourself**
+> Returning to an old project? Query the index to understand the architecture, find where things are defined, see the patterns that were used
+
+**Code review context**
+> "Is this how we usually do it?" → Search for similar implementations to check consistency with established patterns
+
+**Find duplication**
+> Pass a code snippet to `find_similar_code` → Discover near-duplicates across your codebase that could be refactored
+
+The real value compounds over time. The more projects you index, the more patterns your assistant can draw from. The quality scales with the model - better models make better use of the retrieved context.
 
 ## Install
 
