@@ -180,7 +180,7 @@ pub async fn run_opts(
 
         if !throttle.is_zero() {
             // sample system load periodically instead of every file
-            if indexed.is_multiple_of(LOAD_SAMPLE_INTERVAL) {
+            if indexed % LOAD_SAMPLE_INTERVAL == 0 {
                 cached_load = resource::get_system_load().unwrap_or(0.0);
             }
             let multiplier = if cached_load > 4.0 {
