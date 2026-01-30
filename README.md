@@ -117,16 +117,8 @@ I've also found that agents tend to write more consistent code when they can ref
 
 ### Testing the MCP server
 
-Using the official MCP inspector:
-
 ```bash
 npx @modelcontextprotocol/inspector srag mcp
-```
-
-Or manually via stdin:
-
-```bash
-printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1.0"}}}\n{"jsonrpc":"2.0","method":"notifications/initialized"}\n{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}\n' | srag mcp
 ```
 
 ## Configuration
