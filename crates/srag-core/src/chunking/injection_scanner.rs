@@ -268,7 +268,7 @@ pub fn scan_with_threshold(content: &str, threshold: f32) -> ScanResult {
 
     // Check for suspicious Unicode (homoglyphs)
     let homoglyph_count = count_suspicious_unicode(content);
-    if homoglyph_count > 2 {
+    if homoglyph_count >= 2 {
         let weight = (homoglyph_count as f32 * 0.05).min(0.3);
         result.add_match(
             &format!("{} potential homoglyphs detected", homoglyph_count),

@@ -97,7 +97,7 @@ mod tests {
 
     #[test]
     fn test_chunk_file_rust_tree_sitter() {
-        let content = b"fn main() {\n    println!(\"hi\");\n}";
+        let content = b"fn main() {\n    println!(\"hello world from srag\");\n    let x = 42;\n}";
         let result = chunk_file(content, Language::Rust).unwrap();
         assert!(!result.is_empty());
         assert!(result.iter().any(|c| c.symbol == Some("main".to_string())));
