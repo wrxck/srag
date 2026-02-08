@@ -4,6 +4,7 @@
 use srag_common::types::{Chunk, Language};
 use srag_common::Result;
 
+pub mod call_graph;
 mod config_chunker;
 pub mod injection_scanner;
 mod line_chunker;

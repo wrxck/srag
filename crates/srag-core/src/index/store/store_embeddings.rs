@@ -251,6 +251,16 @@ impl Store {
         project_id: Option<i64>,
         limit: usize,
     ) -> Result<Vec<(i64, f64)>> {
+        self.search_fts_project_paginated(query, project_id, limit, 0)
+    }
+
+    pub fn search_fts_project_paginated(
+        &self,
+        query: &str,
+        project_id: Option<i64>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<(i64, f64)>> {
         let escaped = escape_fts5_query(query);
         if escaped.is_empty() {
             return Ok(Vec::new());
@@ -262,12 +272,12 @@ impl Store {
                  JOIN chunks c ON fts.chunk_id = c.id
                  JOIN files f ON c.file_id = f.id
                  WHERE fts.content MATCH ?1 AND f.project_id = ?2
-                 ORDER BY fts.rank LIMIT ?3",
+                 ORDER BY fts.rank LIMIT ?3 OFFSET ?4",
                 true,
             )
         } else {
             (
-                "SELECT chunk_id, rank FROM chunks_fts WHERE chunks_fts MATCH ?1 ORDER BY rank LIMIT ?2",
+                "SELECT chunk_id, rank FROM chunks_fts WHERE chunks_fts MATCH ?1 ORDER BY rank LIMIT ?2 OFFSET ?3",
                 false
             )
         };
@@ -282,14 +292,17 @@ impl Store {
 
         if use_project {
             let rows = stmt
-                .query_map(params![escaped, project_id.unwrap(), limit as i64], mapper)
+                .query_map(
+                    params![escaped, project_id.unwrap(), limit as i64, offset as i64],
+                    mapper,
+                )
                 .map_err(|e| Error::Sqlite(e.to_string()))?;
             for row in rows {
                 results.push(row.map_err(|e| Error::Sqlite(e.to_string()))?);
             }
         } else {
             let rows = stmt
-                .query_map(params![escaped, limit as i64], mapper)
+                .query_map(params![escaped, limit as i64, offset as i64], mapper)
                 .map_err(|e| Error::Sqlite(e.to_string()))?;
             for row in rows {
                 results.push(row.map_err(|e| Error::Sqlite(e.to_string()))?);

@@ -27,6 +27,9 @@ nice_level = 10
 llm_idle_timeout_secs = 300
 memory_budget_mb = 2048
 
+[mcp]
+auto_index_cwd = true
+
 # additional glob patterns to ignore (beyond .gitignore)
 # note: dependency dirs (node_modules, vendor, .venv, etc) are excluded separately
 # via include_dependencies setting above

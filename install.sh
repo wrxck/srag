@@ -217,6 +217,25 @@ configure_claude_mcp() {
 
 configure_claude_mcp
 
+save_source_dir() {
+    local config_file="$CONFIG_DIR/config.toml"
+    if [ -f "$config_file" ]; then
+        if grep -q "^source_dir" "$config_file" 2>/dev/null; then
+            sed -i.bak "s|^source_dir.*|source_dir = \"$SCRIPT_DIR\"|" "$config_file"
+            rm -f "${config_file}.bak"
+        else
+            echo "" >> "$config_file"
+            echo "source_dir = \"$SCRIPT_DIR\"" >> "$config_file"
+        fi
+    else
+        mkdir -p "$CONFIG_DIR"
+        echo "source_dir = \"$SCRIPT_DIR\"" > "$config_file"
+    fi
+}
+
+save_source_dir
+ok "source directory saved for updates"
+
 echo ""; echo "------------------------------------------------------------------------"
 ok "Install complete!"
 echo "------------------------------------------------------------------------"
@@ -231,3 +250,6 @@ if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
 fi
 
 echo ""; echo "Get started:"; echo "  srag index /path/to/project"; echo "  srag chat"
+echo ""
+echo "For automatic update checks on login, add to your shell config:"
+echo "  srag shell-hook"

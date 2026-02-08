@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 
 class Embedder:
-    """wraps fastembed for text embedding using all-MiniLM-L6-v2."""
+    """wraps fastembed for text embedding using BAAI/bge-small-en-v1.5."""
 
     MODEL_NAME = "BAAI/bge-small-en-v1.5"
     DIMENSION = 384

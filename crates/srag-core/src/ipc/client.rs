@@ -11,8 +11,15 @@ use tokio::net::TcpStream;
 use srag_common::types::{JsonRpcRequest, JsonRpcResponse};
 use srag_common::{Error, Result};
 
+const DEFAULT_MAX_POOL_SIZE: usize = 4;
+const CONNECTION_TIMEOUT_SECS: u64 = 10;
+
+/// ML service client with connection pooling for better concurrency.
+/// Connections are reused when available, new ones created when needed.
 pub struct MlClient {
-    stream: tokio::sync::Mutex<TcpStream>,
+    addr: SocketAddr,
+    pool: tokio::sync::Mutex<Vec<TcpStream>>,
+    max_pool_size: usize,
     next_id: AtomicU64,
     auth_token: Option<String>,
 }
@@ -35,17 +42,51 @@ pub fn read_service_addr(port_file: &Path) -> Result<SocketAddr> {
 
 impl MlClient {
     pub async fn connect(addr: SocketAddr) -> Result<Self> {
-        let stream =
-            tokio::time::timeout(std::time::Duration::from_secs(10), TcpStream::connect(addr))
-                .await
-                .map_err(|_| Error::Ipc(format!("Connection to {} timed out", addr)))?
-                .map_err(|e| Error::Ipc(format!("Failed to connect to {}: {}", addr, e)))?;
+        Self::connect_with_pool_size(addr, DEFAULT_MAX_POOL_SIZE).await
+    }
+
+    pub async fn connect_with_pool_size(addr: SocketAddr, max_pool_size: usize) -> Result<Self> {
+        // verify connection works by creating one
+        let stream = Self::create_connection(addr).await?;
         let auth_token = crate::ipc::lifecycle::read_auth_token().ok();
+
         Ok(Self {
-            stream: tokio::sync::Mutex::new(stream),
+            addr,
+            pool: tokio::sync::Mutex::new(vec![stream]),
+            max_pool_size,
             next_id: AtomicU64::new(1),
             auth_token,
         })
+    }
+
+    async fn create_connection(addr: SocketAddr) -> Result<TcpStream> {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(CONNECTION_TIMEOUT_SECS),
+            TcpStream::connect(addr),
+        )
+        .await
+        .map_err(|_| Error::Ipc(format!("Connection to {} timed out", addr)))?
+        .map_err(|e| Error::Ipc(format!("Failed to connect to {}: {}", addr, e)))
+    }
+
+    async fn acquire_connection(&self) -> Result<TcpStream> {
+        // try to get from pool first
+        {
+            let mut pool = self.pool.lock().await;
+            if let Some(stream) = pool.pop() {
+                return Ok(stream);
+            }
+        }
+        // pool empty, create new connection
+        Self::create_connection(self.addr).await
+    }
+
+    async fn release_connection(&self, stream: TcpStream) {
+        let mut pool = self.pool.lock().await;
+        if pool.len() < self.max_pool_size {
+            pool.push(stream);
+        }
+        // else drop stream (pool full)
     }
 
     fn next_id(&self) -> u64 {
@@ -62,15 +103,32 @@ impl MlClient {
         } else {
             serde_json::to_vec(request)?
         };
+
+        let mut stream = self.acquire_connection().await?;
+
+        match self.send_on_stream(&mut stream, &json).await {
+            Ok(response) => {
+                // success - return connection to pool
+                self.release_connection(stream).await;
+                Ok(response)
+            }
+            Err(e) => {
+                // error - drop connection, don't return to pool
+                drop(stream);
+                Err(e)
+            }
+        }
+    }
+
+    async fn send_on_stream(&self, stream: &mut TcpStream, json: &[u8]) -> Result<JsonRpcResponse> {
         let len = json.len() as u32;
 
-        let mut stream = self.stream.lock().await;
         stream
             .write_all(&len.to_be_bytes())
             .await
             .map_err(|e| Error::Ipc(e.to_string()))?;
         stream
-            .write_all(&json)
+            .write_all(json)
             .await
             .map_err(|e| Error::Ipc(e.to_string()))?;
         stream

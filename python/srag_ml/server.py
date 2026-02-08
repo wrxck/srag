@@ -23,6 +23,9 @@ from .models import (
 from .reranker import Reranker
 from .api_client import ExternalApiClient
 
+# maximum number of texts allowed in a single embedding batch request
+MAX_EMBED_BATCH_SIZE = 64
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 
@@ -85,6 +88,7 @@ class MlServer:
         self._running = False
         self._idle_check_interval = 30
         self._llm_idle_timeout = 300
+        self._lock = threading.Lock()
         self._request_id = 0
 
     def run(self):
@@ -132,6 +136,7 @@ class MlServer:
             self._llm.unload()
 
     def _handle_connection(self, conn: socket.socket):
+        conn.settimeout(30.0)  # 30 second timeout on client connections
         try:
             while self._running:
                 data = self._recv_message(conn)
@@ -187,74 +192,85 @@ class MlServer:
         return {"status": "ok"}
 
     def _handle_embed(self, params: dict) -> dict:
-        texts = params.get("texts", [])
-        if not texts:
-            raise ValueError("No texts provided")
-        if len(texts) > 64:
-            raise ValueError("Max 64 texts per batch")
+        with self._lock:
+            texts = params.get("texts", [])
+            if not texts:
+                raise ValueError("No texts provided")
+            if len(texts) > MAX_EMBED_BATCH_SIZE:
+                raise ValueError(
+                    f"Batch size {len(texts)} exceeds maximum of {MAX_EMBED_BATCH_SIZE} texts per request"
+                )
 
-        vectors = self._embedder.embed(texts)
-        return {"vectors": vectors}
+            vectors = self._embedder.embed(texts)
+            return {"vectors": vectors}
 
     def _handle_generate(self, params: dict) -> dict:
-        prompt = params.get("prompt", "")
-        if not prompt:
-            raise ValueError("No prompt provided")
+        with self._lock:
+            prompt = params.get("prompt", "")
+            if not prompt:
+                raise ValueError("No prompt provided")
 
-        max_tokens = params.get("max_tokens", 1024)
-        temperature = params.get("temperature", 0.1)
-        stop = params.get("stop", None)
+            max_tokens = params.get("max_tokens", 1024)
+            if not isinstance(max_tokens, (int, float)) or max_tokens < 1 or max_tokens > 32768:
+                max_tokens = 1024
+            temperature = params.get("temperature", 0.1)
+            if not isinstance(temperature, (int, float)) or temperature < 0.0 or temperature > 2.0:
+                temperature = 0.1
+            stop = params.get("stop", None)
 
-        if self._api_client is not None:
-            result = self._api_client.generate(
-                prompt=prompt,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                stop=stop,
-            )
-        else:
-            result = self._llm.generate(
-                prompt=prompt,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                stop=stop,
-            )
-        return result
+            if self._api_client is not None:
+                result = self._api_client.generate(
+                    prompt=prompt,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    stop=stop,
+                )
+            else:
+                result = self._llm.generate(
+                    prompt=prompt,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    stop=stop,
+                )
+            return result
 
     def _handle_rerank(self, params: dict) -> dict:
-        query = params.get("query", "")
-        documents = params.get("documents", [])
-        top_k = params.get("top_k", 10)
+        with self._lock:
+            query = params.get("query", "")
+            documents = params.get("documents", [])
+            top_k = params.get("top_k", 10)
 
-        if not query:
-            raise ValueError("No query provided")
-        if not documents:
-            raise ValueError("No documents provided")
+            if not query:
+                raise ValueError("No query provided")
+            if not documents:
+                raise ValueError("No documents provided")
 
-        results = self._reranker.rerank(query, documents, top_k)
-        return {"results": results}
+            results = self._reranker.rerank(query, documents, top_k)
+            return {"results": results}
 
     def _handle_load_model(self, params: dict) -> dict:
-        model_type = params.get("type", "embedder")
-        if model_type == "embedder":
-            self._embedder.load()
-        elif model_type == "llm":
-            if self._llm is None:
-                raise ValueError("Local LLM not available - using external API")
-            model_path = params.get("path")
-            self._llm.load(model_path)
-        else:
-            raise ValueError(f"Unknown model type: {model_type}")
-        return {"status": "loaded"}
+        with self._lock:
+            model_type = params.get("type", "embedder")
+            if model_type == "embedder":
+                self._embedder.load()
+            elif model_type == "llm":
+                if self._llm is None:
+                    raise ValueError("Local LLM not available - using external API")
+                model_path = params.get("path")
+                self._llm.load(model_path)
+            else:
+                raise ValueError(f"Unknown model type: {model_type}")
+            return {"status": "loaded"}
 
     def _handle_unload_model(self, params: dict) -> dict:
-        model_type = params.get("type", "llm")
-        if model_type == "embedder":
-            self._embedder.unload()
-        elif model_type == "llm":
-            if self._llm:
-                self._llm.unload()
-        return {"status": "unloaded"}
+        with self._lock:
+            model_type = params.get("type", "llm")
+            if model_type == "embedder":
+                self._embedder.unload()
+            elif model_type == "llm":
+                if self._llm:
+                    self._llm.unload()
+            return {"status": "unloaded"}
 
     def _handle_model_status(self, params: dict) -> dict:
         llm_loaded = self._llm.is_loaded if self._llm else False
@@ -265,7 +281,7 @@ class MlServer:
             "llm_loaded": llm_loaded,
             "reranker_loaded": self._reranker.is_loaded,
             "embedder_memory_mb": 90.0 if self._embedder.is_loaded else None,
-            "llm_memory_mb": llm_memory,
+            "process_memory_mb": llm_memory,
             "reranker_memory_mb": 100.0 if self._reranker.is_loaded else None,
             "api_provider": self._api_provider,
             "api_redactions": (

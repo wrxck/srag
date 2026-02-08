@@ -1,18 +1,61 @@
-// SPDX-License-Identifier: GPL-3.0
+// SPDX-Licence-Identifier: GPL-3.0
 // Copyright (c) 2026 Matt Hesketh <matt@matthesketh.pro>
+
+mod sections;
 
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-/// embedding vector dimension for the default model (all-MiniLM-L6-v2)
+pub use sections::{
+    ApiConfig, ApiProvider, IndexingConfig, LlmConfig, McpConfig, QueryConfig, ResourceConfig,
+    WatcherConfig,
+};
+
 pub const EMBEDDING_DIMENSION: usize = 384;
+
+pub const DEPENDENCY_DIRS: &[&str] = &[
+    "node_modules",
+    "bower_components",
+    "target",
+    ".venv",
+    "venv",
+    "env",
+    ".env",
+    "__pycache__",
+    ".eggs",
+    "*.egg-info",
+    ".tox",
+    ".nox",
+    "vendor",
+    "vendor/bundle",
+    ".gradle",
+    ".m2",
+    "build",
+    "bin",
+    "obj",
+    "packages",
+    "deps",
+    "_build",
+    ".stack-work",
+    "dist-newstyle",
+    "_opam",
+    "Pods",
+    ".build",
+    "DerivedData",
+    ".dart_tool",
+    ".pub-cache",
+    "zig-cache",
+    "zig-out",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default = "Config::default_data_dir")]
     pub data_dir: PathBuf,
+    #[serde(default)]
+    pub source_dir: Option<String>,
     #[serde(default)]
     pub indexing: IndexingConfig,
     #[serde(default)]
@@ -26,310 +69,29 @@ pub struct Config {
     #[serde(default)]
     pub api: ApiConfig,
     #[serde(default)]
+    pub mcp: McpConfig,
+    #[serde(default)]
     pub ignore_patterns: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IndexingConfig {
-    #[serde(default = "default_max_file_size")]
-    pub max_file_size_bytes: u64,
-    #[serde(default = "default_batch_size")]
-    pub batch_size: usize,
-    #[serde(default = "default_throttle_ms")]
-    pub throttle_ms: u64,
-    /// include dependency directories (node_modules, vendor, etc). default: false
-    #[serde(default)]
-    pub include_dependencies: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QueryConfig {
-    #[serde(default = "default_top_k")]
-    pub top_k: usize,
-    #[serde(default = "default_ef_search")]
-    pub ef_search: usize,
-    #[serde(default = "default_context_tokens")]
-    pub context_tokens: usize,
-    #[serde(default = "default_history_turns")]
-    pub history_turns: usize,
-    #[serde(default = "default_temperature")]
-    pub temperature: f32,
-    #[serde(default = "default_max_tokens")]
-    pub max_tokens: u32,
-    #[serde(default = "default_rerank")]
-    pub rerank: bool,
-    #[serde(default = "default_broad_k")]
-    pub broad_k: usize,
-    #[serde(default = "default_hybrid_search")]
-    pub hybrid_search: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WatcherConfig {
-    #[serde(default = "default_debounce_ms")]
-    pub debounce_ms: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ResourceConfig {
-    #[serde(default = "default_nice_level")]
-    pub nice_level: i32,
-    #[serde(default = "default_llm_idle_timeout_secs")]
-    pub llm_idle_timeout_secs: u64,
-    #[serde(default = "default_memory_budget_mb")]
-    pub memory_budget_mb: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LlmConfig {
-    #[serde(default = "default_model_filename")]
-    pub model_filename: String,
-    #[serde(default = "default_model_url")]
-    pub model_url: String,
-    #[serde(default = "default_llm_threads")]
-    pub threads: usize,
-    #[serde(default = "default_llm_context_size")]
-    pub context_size: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
-#[derive(Default)]
-pub enum ApiProvider {
-    #[default]
-    Local,
-    Anthropic,
-    OpenAI,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApiConfig {
-    /// which provider to use: local, anthropic, or openai
-    #[serde(default)]
-    pub provider: ApiProvider,
-    /// model name for external API (e.g. "claude-sonnet-4-20250514", "gpt-4o")
-    #[serde(default = "default_api_model")]
-    pub model: String,
-    /// max tokens for API response
-    #[serde(default = "default_api_max_tokens")]
-    pub max_tokens: u32,
-    /// whether secret redaction is enabled (always true for external APIs)
-    #[serde(default = "default_true")]
-    pub redact_secrets: bool,
-    /// log when secrets are redacted
-    #[serde(default = "default_true")]
-    pub log_redactions: bool,
-}
-
-fn default_max_file_size() -> u64 {
-    1_048_576
-} // 1MB
-fn default_batch_size() -> usize {
-    32
-}
-fn default_throttle_ms() -> u64 {
-    10
-}
-fn default_top_k() -> usize {
-    10
-}
-fn default_ef_search() -> usize {
-    48
-}
-fn default_context_tokens() -> usize {
-    2048
-}
-fn default_history_turns() -> usize {
-    6
-}
-fn default_temperature() -> f32 {
-    0.1
-}
-fn default_max_tokens() -> u32 {
-    1024
-}
-fn default_rerank() -> bool {
-    true
-}
-fn default_broad_k() -> usize {
-    50
-}
-fn default_hybrid_search() -> bool {
-    true
-}
-fn default_debounce_ms() -> u64 {
-    500
-}
-fn default_nice_level() -> i32 {
-    10
-}
-fn default_llm_idle_timeout_secs() -> u64 {
-    300
-}
-fn default_memory_budget_mb() -> u64 {
-    2048
-}
-fn default_model_filename() -> String {
-    "Llama-3.2-1B-Instruct-Q4_K_M.gguf".into()
-}
-fn default_model_url() -> String {
-    "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf".into()
-}
-fn default_llm_threads() -> usize {
-    0
-}
-fn default_llm_context_size() -> usize {
-    4096
-}
-fn default_api_model() -> String {
-    "claude-sonnet-4-20250514".into()
-}
-fn default_api_max_tokens() -> u32 {
-    2048
-}
-fn default_true() -> bool {
-    true
-}
-
-impl Default for IndexingConfig {
-    fn default() -> Self {
-        Self {
-            max_file_size_bytes: default_max_file_size(),
-            batch_size: default_batch_size(),
-            throttle_ms: default_throttle_ms(),
-            include_dependencies: false,
-        }
-    }
-}
-
-/// Common dependency/vendor directories across languages.
-/// Excluded by default unless `include_dependencies` is true.
-pub const DEPENDENCY_DIRS: &[&str] = &[
-    // JavaScript/TypeScript
-    "node_modules",
-    "bower_components",
-    // Rust
-    "target",
-    // Python
-    ".venv",
-    "venv",
-    "env",
-    ".env",
-    "__pycache__",
-    ".eggs",
-    "*.egg-info",
-    ".tox",
-    ".nox",
-    // Go
-    "vendor",
-    // Ruby
-    "vendor/bundle",
-    // PHP
-    "vendor",
-    // Java/Kotlin/Scala
-    ".gradle",
-    ".m2",
-    "build",
-    // .NET/C#
-    "bin",
-    "obj",
-    "packages",
-    // Elixir
-    "deps",
-    "_build",
-    // Haskell
-    ".stack-work",
-    "dist-newstyle",
-    // OCaml
-    "_opam",
-    // Swift/iOS
-    "Pods",
-    ".build",
-    "DerivedData",
-    // Dart/Flutter
-    ".dart_tool",
-    ".pub-cache",
-    // Zig
-    "zig-cache",
-    "zig-out",
-];
-
-impl Default for QueryConfig {
-    fn default() -> Self {
-        Self {
-            top_k: default_top_k(),
-            ef_search: default_ef_search(),
-            context_tokens: default_context_tokens(),
-            history_turns: default_history_turns(),
-            temperature: default_temperature(),
-            max_tokens: default_max_tokens(),
-            rerank: default_rerank(),
-            broad_k: default_broad_k(),
-            hybrid_search: default_hybrid_search(),
-        }
-    }
-}
-
-impl Default for WatcherConfig {
-    fn default() -> Self {
-        Self {
-            debounce_ms: default_debounce_ms(),
-        }
-    }
-}
-
-impl Default for ResourceConfig {
-    fn default() -> Self {
-        Self {
-            nice_level: default_nice_level(),
-            llm_idle_timeout_secs: default_llm_idle_timeout_secs(),
-            memory_budget_mb: default_memory_budget_mb(),
-        }
-    }
-}
-
-impl Default for LlmConfig {
-    fn default() -> Self {
-        Self {
-            model_filename: default_model_filename(),
-            model_url: default_model_url(),
-            threads: default_llm_threads(),
-            context_size: default_llm_context_size(),
-        }
-    }
-}
-
-impl Default for ApiConfig {
-    fn default() -> Self {
-        Self {
-            provider: ApiProvider::Local,
-            model: default_api_model(),
-            max_tokens: default_api_max_tokens(),
-            redact_secrets: true,
-            log_redactions: true,
-        }
-    }
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             data_dir: Self::default_data_dir(),
+            source_dir: None,
             indexing: IndexingConfig::default(),
             query: QueryConfig::default(),
             watcher: WatcherConfig::default(),
             resource: ResourceConfig::default(),
             llm: LlmConfig::default(),
             api: ApiConfig::default(),
+            mcp: McpConfig::default(),
             ignore_patterns: vec![
-                // lock files
                 "*.lock".into(),
-                // minified/generated assets
                 "*.min.js".into(),
                 "*.min.css".into(),
                 "*.map".into(),
                 "*.wasm".into(),
-                // compiled artifacts
                 "*.pyc".into(),
                 "*.o".into(),
                 "*.so".into(),
@@ -337,7 +99,6 @@ impl Default for Config {
                 "*.dll".into(),
                 "*.exe".into(),
                 "*.bin".into(),
-                // images/media
                 "*.png".into(),
                 "*.jpg".into(),
                 "*.jpeg".into(),
@@ -345,13 +106,10 @@ impl Default for Config {
                 "*.ico".into(),
                 "*.svg".into(),
                 "*.pdf".into(),
-                // archives
                 "*.zip".into(),
                 "*.tar".into(),
                 "*.gz".into(),
-                // vcs
                 ".git".into(),
-                // build output (not dependencies)
                 "dist".into(),
             ],
         }
@@ -412,6 +170,9 @@ impl Config {
         if self.query.broad_k == 0 {
             anyhow::bail!("query.broad_k must be > 0");
         }
+        if let Err(e) = self.llm.validate() {
+            anyhow::bail!(e);
+        }
         Ok(())
     }
 
@@ -451,6 +212,10 @@ impl Config {
         self.data_dir.join("logs")
     }
 
+    pub fn data_dir(&self) -> &PathBuf {
+        &self.data_dir
+    }
+
     pub fn runtime_dir() -> PathBuf {
         #[cfg(unix)]
         {
@@ -480,8 +245,44 @@ impl Config {
         Self::runtime_dir().join("watcher.pid")
     }
 
+    /// returns the path for storing the API key.
+    /// uses the config directory (not runtime dir) for security - runtime dirs may be world-readable.
     pub fn api_key_path(&self) -> PathBuf {
-        Self::runtime_dir().join("api.key")
+        Self::config_path()
+            .parent()
+            .unwrap_or(&PathBuf::from("."))
+            .join("api.key")
+    }
+
+    /// write the API key to the key file with proper 0o600 permissions.
+    pub fn write_api_key(&self, key: &str) -> Result<()> {
+        let path = self.api_key_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+            }
+        }
+
+        #[cfg(unix)]
+        {
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&path)?;
+            file.write_all(key.as_bytes())?;
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::write(&path, key)?;
+        }
+        Ok(())
     }
 
     pub fn is_external_api(&self) -> bool {
@@ -571,22 +372,6 @@ mod tests {
     }
 
     #[test]
-    fn test_api_provider_serde() {
-        assert_eq!(
-            serde_json::to_string(&ApiProvider::Local).unwrap(),
-            "\"local\""
-        );
-        assert_eq!(
-            serde_json::to_string(&ApiProvider::Anthropic).unwrap(),
-            "\"anthropic\""
-        );
-        assert_eq!(
-            serde_json::to_string(&ApiProvider::OpenAI).unwrap(),
-            "\"openai\""
-        );
-    }
-
-    #[test]
     fn test_is_external_api() {
         let mut config = Config::default();
         assert!(!config.is_external_api());
@@ -623,6 +408,6 @@ batch_size = 64
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.indexing.batch_size, 64);
-        assert_eq!(config.indexing.max_file_size_bytes, default_max_file_size());
+        assert_eq!(config.indexing.max_file_size_bytes, 1_048_576);
     }
 }

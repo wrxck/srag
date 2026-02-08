@@ -115,6 +115,20 @@ Now this is where it becomes quite a powerful tool, because not only will your a
 
 I've also found that agents tend to write more consistent code when they can reference your existing patterns rather than inventing new ones each time.
 
+### Available MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `list_projects` | List all indexed projects with their paths |
+| `search_code` | Semantic search using vector similarity |
+| `find_similar_code` | Find code similar to a snippet |
+| `search_symbols` | Search for functions, classes, or symbols by name pattern |
+| `get_file` | Get file contents or specific line ranges |
+| `get_project_patterns` | Analyse project conventions (naming, structure, languages) |
+| `text_search` | Full-text keyword search for exact terms |
+| `find_callers` | Find all functions that call a specific function |
+| `find_callees` | Find all functions called by a specific function |
+
 ### Testing the MCP server
 
 ```bash
@@ -154,6 +168,81 @@ This removes the binary, Python environment, and offers to clean up the Claude M
 ## Contributing
 
 Contributions are welcome - see [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+
+## Alternatives
+
+There are several other semantic code search tools worth considering. Here's how srag compares:
+
+| Feature | srag | [grepai](https://github.com/yoanbernabeu/grepai) | [CodeGrok](https://github.com/peterdemin/CodeGrok) | [DeepContext](https://github.com/DeepContext/deepcontext) |
+|---------|------|--------|----------|-------------|
+| **Search** |
+| Semantic vector search | Yes | Yes | Yes | Yes |
+| Full-text keyword search | Yes | Yes | No | Yes (BM25) |
+| Hybrid search (vector + FTS) | Yes, RRF fusion | Yes | No | Yes |
+| Reranking | Yes | No | No | Yes (Jina) |
+| **Indexing** |
+| AST-aware chunking | Yes, tree-sitter | Yes | Yes, tree-sitter | Yes, tree-sitter |
+| Incremental (hash-based) | Yes, blake3 | Yes | Yes, mtime | Yes, SHA-256 |
+| File watcher | Yes | Yes | No | No |
+| Auto-index on first query | Yes | No | No | No |
+| **Languages** | 9 (AST) + line-based | 12+ | 9 | 2 |
+| **Security** |
+| Prompt injection detection | Yes | No | No | No |
+| Secret redaction | Yes | No | No | No |
+| **Integration** |
+| MCP server | Yes | Yes | Yes | Yes |
+| Multi-project support | Yes | Yes, workspaces | No | No |
+| Cross-project search | Yes | Yes | No | No |
+| **Privacy** |
+| Fully local option | Yes | Yes (Ollama) | Yes | No (needs Jina API) |
+| **Other** |
+| Pattern analysis | Yes | No | No | No |
+| Similar code finder | Yes | No | No | No |
+| Interactive chat | Yes | No | No | No |
+| Call graph tracing | Yes | Yes | No | No |
+
+### When to use what
+
+**Choose srag if you:**
+- Need security features (prompt injection detection, secret redaction)
+- Want hybrid search with reranking for better accuracy
+- Have multiple projects and want cross-project search
+- Prefer auto-indexing without manual setup
+- Want to analyse coding patterns across your codebase
+- Need call graph tracing (find callers/callees of functions)
+
+**Choose [grepai](https://github.com/yoanbernabeu/grepai) if you:**
+- Want a single binary with no Python dependency
+- Need the broadest language support (12+)
+- Want pre-built AI agent skills
+
+**Choose [CodeGrok](https://github.com/peterdemin/CodeGrok) if you:**
+- Want GPU-accelerated embedding generation
+- Need detailed symbol metadata (signatures, docstrings)
+- Prefer a simpler, focused tool
+
+**Choose [DeepContext](https://github.com/DeepContext/deepcontext) if you:**
+- Want Jina's embedding models
+- Need automatic test/generated file exclusion
+- Are working primarily with TypeScript/Python
+
+### Supported Languages
+
+srag uses tree-sitter for AST-aware code chunking:
+
+| Language | Extensions |
+|----------|------------|
+| Rust | `.rs` |
+| Python | `.py` |
+| JavaScript | `.js`, `.jsx`, `.mjs` |
+| TypeScript | `.ts`, `.tsx` |
+| Go | `.go` |
+| C | `.c`, `.h` |
+| C++ | `.cpp`, `.hpp`, `.cc`, `.cxx` |
+| Java | `.java` |
+| Ruby | `.rb` |
+
+**Line-based chunking** is used for config and documentation files: Markdown, JSON, YAML, TOML, Shell scripts, SQL, HTML, CSS, and environment files.
 
 ## License
 

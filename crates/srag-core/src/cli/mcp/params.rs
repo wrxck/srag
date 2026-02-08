@@ -29,6 +29,8 @@ pub struct SearchSymbolsParams {
     pub pattern: String,
     #[serde(default = "default_symbol_limit")]
     pub limit: usize,
+    #[serde(default)]
+    pub offset: usize,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -55,6 +57,22 @@ pub struct FtsSearchParams {
     pub query: String,
     #[serde(default = "default_top_k")]
     pub limit: usize,
+    #[serde(default)]
+    pub offset: usize,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FindCallersParams {
+    #[serde(default)]
+    pub project: Option<String>,
+    pub function_name: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FindCalleesParams {
+    #[serde(default)]
+    pub project: Option<String>,
+    pub function_name: String,
 }
 
 fn default_top_k() -> usize {

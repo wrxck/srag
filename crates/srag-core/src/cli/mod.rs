@@ -10,6 +10,7 @@ mod remove_cmd;
 mod setup_cmd;
 mod status_cmd;
 mod sync_cmd;
+mod update_cmd;
 mod watch_cmd;
 
 use clap::{Parser, Subcommand};
@@ -105,6 +106,16 @@ enum Commands {
         #[arg(long, short = 'y')]
         force: bool,
     },
+    /// update srag to the latest version from GitHub
+    Update {
+        /// force update even if already up to date
+        #[arg(long)]
+        force: bool,
+    },
+    /// check for available updates (used by shell hook)
+    CheckUpdate,
+    /// print shell hook for automatic update checking
+    ShellHook,
 }
 
 #[derive(Subcommand)]
@@ -146,10 +157,7 @@ impl Cli {
                 project,
                 query,
                 json,
-            } => {
-                //TODO: add a way to specify the project and the query from the command line
-                query_cmd::run(&project, &query, json).await
-            }
+            } => query_cmd::run(&project, &query, json).await,
             Commands::Setup { all } => setup_cmd::run(all).await,
             Commands::Status { detailed } => status_cmd::run(detailed).await,
             Commands::Config { action } => match action {
@@ -163,6 +171,12 @@ impl Cli {
             Commands::Sync => sync_cmd::run().await,
             Commands::Mcp => mcp::run().await,
             Commands::Remove { project, force } => remove_cmd::run(&project, force).await,
+            Commands::Update { force } => update_cmd::run(force).await,
+            Commands::CheckUpdate => update_cmd::check().await,
+            Commands::ShellHook => {
+                update_cmd::print_shell_hook();
+                Ok(())
+            }
         }
     }
 }

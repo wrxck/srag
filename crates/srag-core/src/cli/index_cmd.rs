@@ -141,6 +141,7 @@ pub async fn run_opts(
 
             store.delete_file_chunks_fts(file_id)?;
             store.delete_file_embeddings(file_id)?;
+            store.delete_file_call_graph(file_id)?;
             store.delete_file_chunks(file_id)?;
 
             for chunk in &chunks {
@@ -155,6 +156,19 @@ pub async fn run_opts(
                     &abs_file_path,
                     c.symbol.as_deref(),
                 )?;
+
+                if language.has_tree_sitter_support() {
+                    if let Some(cg) = crate::chunking::call_graph::extract_call_graph(
+                        &c.content, language, file_id, chunk_id,
+                    ) {
+                        for def in &cg.definitions {
+                            let _ = store.insert_definition(def);
+                        }
+                        for call in &cg.calls {
+                            let _ = store.insert_function_call(call);
+                        }
+                    }
+                }
 
                 let enriched = enrich_chunk_text(&abs_file_path, &c);
                 pending.push((chunk_id, enriched));

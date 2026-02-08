@@ -1,8 +1,11 @@
-// SPDX-License-Identifier: GPL-3.0
+// SPDX-Licence-Identifier: GPL-3.0
 // Copyright (c) 2026 Matt Hesketh <matt@matthesketh.pro>
 
 mod helpers;
 mod params;
+
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use anyhow::Result;
 use rmcp::{
@@ -12,12 +15,54 @@ use rmcp::{
 
 use crate::config::Config;
 use crate::index::store::Store;
-use helpers::{format_chunk, resolve_project};
+use helpers::{ensure_index_exists, format_chunk, resolve_project};
 use params::*;
+
+#[derive(Clone)]
+struct RateLimiter {
+    state: Arc<Mutex<RateLimiterState>>,
+    capacity: u32,
+    refill_rate: f64,
+}
+
+struct RateLimiterState {
+    tokens: f64,
+    last_refill: Instant,
+}
+
+impl RateLimiter {
+    fn new(capacity: u32, refill_interval_secs: u64) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(RateLimiterState {
+                tokens: capacity as f64,
+                last_refill: Instant::now(),
+            })),
+            capacity,
+            refill_rate: capacity as f64 / refill_interval_secs as f64,
+        }
+    }
+
+    fn try_acquire(&self) -> bool {
+        let mut state = self.state.lock().unwrap();
+        let now = Instant::now();
+        let elapsed = now.duration_since(state.last_refill).as_secs_f64();
+
+        state.tokens = (state.tokens + elapsed * self.refill_rate).min(self.capacity as f64);
+        state.last_refill = now;
+
+        if state.tokens >= 1.0 {
+            state.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct SragMcpServer {
     tool_router: rmcp::handler::server::tool::ToolRouter<Self>,
+    rate_limiter: RateLimiter,
 }
 
 #[tool_router]
@@ -25,19 +70,37 @@ impl SragMcpServer {
     fn new() -> Self {
         Self {
             tool_router: Self::tool_router(),
+            rate_limiter: RateLimiter::new(60, 60),
         }
+    }
+
+    fn check_rate_limit(&self) -> Result<(), McpError> {
+        if !self.rate_limiter.try_acquire() {
+            return Err(McpError::internal_error(
+                "rate limit exceeded, please try again later",
+                None,
+            ));
+        }
+        Ok(())
     }
 
     #[tool(description = "list all indexed projects with their paths")]
     async fn list_projects(&self) -> Result<CallToolResult, McpError> {
+        self.check_rate_limit()?;
         let config = Config::load().map_err(|e| McpError::internal_error(e.to_string(), None))?;
         let db_path = config.db_path();
 
-        if !db_path.exists() {
-            return Ok(CallToolResult::success(vec![Content::text(
-                "no projects indexed yet",
-            )]));
-        }
+        let auto_indexed = if !db_path.exists() {
+            if config.mcp.auto_index_cwd {
+                Some(helpers::auto_index_cwd(&config).await?)
+            } else {
+                return Ok(CallToolResult::success(vec![Content::text(
+                    "no projects indexed yet",
+                )]));
+            }
+        } else {
+            None
+        };
 
         let store =
             Store::open(&db_path).map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -52,9 +115,21 @@ impl SragMcpServer {
         }
 
         let mut text = String::new();
+
+        if let Some(result) = auto_indexed {
+            text.push_str(&format!(
+                "[auto-indexed '{}': {}]\n\n",
+                result.project_name, result.summary
+            ));
+        }
+
         for p in &projects {
-            let files = store.file_count(p.id).unwrap_or(0);
-            let chunks = store.chunk_count(p.id).unwrap_or(0);
+            let files = store.file_count(p.id).map_err(|e| {
+                McpError::internal_error(format!("Failed to get file count: {}", e), None)
+            })?;
+            let chunks = store.chunk_count(p.id).map_err(|e| {
+                McpError::internal_error(format!("Failed to get chunk count: {}", e), None)
+            })?;
             text.push_str(&format!(
                 "{}: {} ({} files, {} chunks)\n",
                 p.name, p.path, files, chunks
@@ -71,19 +146,18 @@ impl SragMcpServer {
         &self,
         rmcp::handler::server::wrapper::Parameters(params): rmcp::handler::server::wrapper::Parameters<SearchCodeParams>,
     ) -> Result<CallToolResult, McpError> {
+        self.check_rate_limit()?;
         let config = Config::load().map_err(|e| McpError::internal_error(e.to_string(), None))?;
         config
             .ensure_dirs()
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        let db_path = config.db_path();
-        if !db_path.exists() {
-            return Err(McpError::internal_error("No index found", None));
-        }
+        let auto_indexed = ensure_index_exists(&config).await?;
 
+        let db_path = config.db_path();
         let store =
             Store::open(&db_path).map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        let (_, project_name) = resolve_project(&store, params.project.as_deref())?;
+        let (project_id, project_name) = resolve_project(&store, params.project.as_deref())?;
 
         crate::ipc::lifecycle::ensure_ml_service_running(&config)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -94,15 +168,6 @@ impl SragMcpServer {
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        let mut vector_index = crate::index::hnsw::VectorIndex::open(
-            &config.vectors_dir(),
-            crate::config::EMBEDDING_DIMENSION,
-        )
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        crate::index::hnsw::rebuild_hnsw_from_db(&store, &mut vector_index)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
         let query_vectors = client
             .embed(std::slice::from_ref(&params.query))
             .await
@@ -110,32 +175,57 @@ impl SragMcpServer {
         let query_vec = query_vectors
             .into_iter()
             .next()
-            .ok_or_else(|| McpError::internal_error("No embedding returned", None))?;
+            .ok_or_else(|| McpError::internal_error("no embedding returned", None))?;
 
-        let search_k = if config.query.rerank {
+        let search_k = if config.query.rerank || config.query.hybrid_search {
             config.query.broad_k
         } else {
             params.top_k
         };
 
-        let results = vector_index
-            .search(&query_vec, search_k, config.query.ef_search)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        let all_chunks = crate::query::retriever::resolve_results(&store, &results)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let vector_results = crate::index::hnsw::search_cached(
+            &config.vectors_dir(),
+            crate::config::EMBEDDING_DIMENSION,
+            &store,
+            &query_vec,
+            search_k,
+            config.query.ef_search,
+        )
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         let project_files: std::collections::HashSet<String> = store
-            .list_project_files(store.get_project_id(&project_name).unwrap_or(0))
-            .unwrap_or_default()
+            .list_project_files(project_id)
+            .map_err(|e| McpError::internal_error(format!("failed to list files: {}", e), None))?
             .into_iter()
             .map(|f| f.path)
             .collect();
 
-        let context_chunks: Vec<_> = all_chunks
-            .into_iter()
-            .filter(|(_, path)| project_files.contains(path))
-            .collect();
+        let context_chunks: Vec<_> = if config.query.hybrid_search {
+            let fts_results = store
+                .search_fts_project(&params.query, Some(project_id), search_k)
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+            let fused = crate::query::retriever::reciprocal_rank_fusion(
+                &vector_results,
+                &fts_results,
+                &store,
+                search_k,
+            )
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+            fused
+                .into_iter()
+                .filter(|(_, path)| project_files.contains(path))
+                .collect()
+        } else {
+            let all_chunks = crate::query::retriever::resolve_results(&store, &vector_results)
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+            all_chunks
+                .into_iter()
+                .filter(|(_, path)| project_files.contains(path))
+                .collect()
+        };
 
         let context_chunks = if config.query.rerank && context_chunks.len() > 1 {
             let documents: Vec<String> = context_chunks
@@ -147,7 +237,10 @@ impl SragMcpServer {
                     .into_iter()
                     .filter_map(|(idx, _)| context_chunks.get(idx).cloned())
                     .collect(),
-                Err(_) => context_chunks.into_iter().take(params.top_k).collect(),
+                Err(e) => {
+                    tracing::warn!("reranking failed, falling back to original order: {}", e);
+                    context_chunks.into_iter().take(params.top_k).collect()
+                }
             }
         } else {
             context_chunks
@@ -156,7 +249,17 @@ impl SragMcpServer {
                 .collect::<Vec<_>>()
         };
 
-        let mut text = format!("search results from project '{}':\n\n", project_name);
+        let mut text = String::new();
+        if let Some(result) = auto_indexed {
+            text.push_str(&format!(
+                "[auto-indexed '{}': {}]\n\n",
+                result.project_name, result.summary
+            ));
+        }
+        text.push_str(&format!(
+            "search results from project '{}':\n\n",
+            project_name
+        ));
         for (chunk, file_path) in &context_chunks {
             text.push_str(&format_chunk(chunk, file_path));
             text.push('\n');
@@ -172,16 +275,15 @@ impl SragMcpServer {
         &self,
         rmcp::handler::server::wrapper::Parameters(params): rmcp::handler::server::wrapper::Parameters<FindSimilarParams>,
     ) -> Result<CallToolResult, McpError> {
+        self.check_rate_limit()?;
         let config = Config::load().map_err(|e| McpError::internal_error(e.to_string(), None))?;
         config
             .ensure_dirs()
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        let db_path = config.db_path();
-        if !db_path.exists() {
-            return Err(McpError::internal_error("No index found", None));
-        }
+        let auto_indexed = ensure_index_exists(&config).await?;
 
+        let db_path = config.db_path();
         let store =
             Store::open(&db_path).map_err(|e| McpError::internal_error(e.to_string(), None))?;
         let (_, project_name) = resolve_project(&store, params.project.as_deref())?;
@@ -195,15 +297,6 @@ impl SragMcpServer {
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        let mut vector_index = crate::index::hnsw::VectorIndex::open(
-            &config.vectors_dir(),
-            crate::config::EMBEDDING_DIMENSION,
-        )
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        crate::index::hnsw::rebuild_hnsw_from_db(&store, &mut vector_index)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
         let snippet_vectors = client
             .embed(std::slice::from_ref(&params.code_snippet))
             .await
@@ -211,18 +304,27 @@ impl SragMcpServer {
         let snippet_vec = snippet_vectors
             .into_iter()
             .next()
-            .ok_or_else(|| McpError::internal_error("No embedding returned", None))?;
+            .ok_or_else(|| McpError::internal_error("no embedding returned", None))?;
 
-        let results = vector_index
-            .search(&snippet_vec, params.top_k * 4, config.query.ef_search)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let results = crate::index::hnsw::search_cached(
+            &config.vectors_dir(),
+            crate::config::EMBEDDING_DIMENSION,
+            &store,
+            &snippet_vec,
+            params.top_k * 4,
+            config.query.ef_search,
+        )
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         let all_chunks = crate::query::retriever::resolve_results(&store, &results)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
+        let project_id = store.get_project_id(&project_name).map_err(|e| {
+            McpError::internal_error(format!("Failed to get project ID: {}", e), None)
+        })?;
         let project_files: std::collections::HashSet<String> = store
-            .list_project_files(store.get_project_id(&project_name).unwrap_or(0))
-            .unwrap_or_default()
+            .list_project_files(project_id)
+            .map_err(|e| McpError::internal_error(format!("Failed to list files: {}", e), None))?
             .into_iter()
             .map(|f| f.path)
             .collect();
@@ -232,7 +334,17 @@ impl SragMcpServer {
             .filter(|(_, path)| project_files.contains(path))
             .collect();
 
-        let mut text = format!("similar code found in project '{}':\n\n", project_name);
+        let mut text = String::new();
+        if let Some(result) = auto_indexed {
+            text.push_str(&format!(
+                "[auto-indexed '{}': {}]\n\n",
+                result.project_name, result.summary
+            ));
+        }
+        text.push_str(&format!(
+            "similar code found in project '{}':\n\n",
+            project_name
+        ));
         for (i, (chunk, file_path)) in context_chunks.iter().take(params.top_k).enumerate() {
             text.push_str(&format!("{}. ", i + 1));
             text.push_str(&format_chunk(chunk, file_path));
@@ -249,26 +361,25 @@ impl SragMcpServer {
         &self,
         rmcp::handler::server::wrapper::Parameters(params): rmcp::handler::server::wrapper::Parameters<SearchSymbolsParams>,
     ) -> Result<CallToolResult, McpError> {
+        self.check_rate_limit()?;
         let config = Config::load().map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let _ = ensure_index_exists(&config).await?;
+
         let db_path = config.db_path();
-
-        if !db_path.exists() {
-            return Err(McpError::internal_error("No index found", None));
-        }
-
         let store =
             Store::open(&db_path).map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         let project_id = if let Some(ref name) = params.project {
             Some(store.get_project_id(name).map_err(|_| {
-                McpError::invalid_params(format!("Project '{}' not found", name), None)
+                McpError::invalid_params(format!("project '{}' not found", name), None)
             })?)
         } else {
             None
         };
 
         let results = store
-            .search_symbols(&params.pattern, project_id, params.limit)
+            .search_symbols_paginated(&params.pattern, project_id, params.limit, params.offset)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         if results.is_empty() {
@@ -298,13 +409,12 @@ impl SragMcpServer {
         &self,
         rmcp::handler::server::wrapper::Parameters(params): rmcp::handler::server::wrapper::Parameters<GetFileParams>,
     ) -> Result<CallToolResult, McpError> {
+        self.check_rate_limit()?;
         let config = Config::load().map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let _ = ensure_index_exists(&config).await?;
+
         let db_path = config.db_path();
-
-        if !db_path.exists() {
-            return Err(McpError::internal_error("No index found", None));
-        }
-
         let store =
             Store::open(&db_path).map_err(|e| McpError::internal_error(e.to_string(), None))?;
         let (project_id, _) = resolve_project(&store, params.project.as_deref())?;
@@ -350,13 +460,12 @@ impl SragMcpServer {
         &self,
         rmcp::handler::server::wrapper::Parameters(params): rmcp::handler::server::wrapper::Parameters<GetPatternsParams>,
     ) -> Result<CallToolResult, McpError> {
+        self.check_rate_limit()?;
         let config = Config::load().map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let _ = ensure_index_exists(&config).await?;
+
         let db_path = config.db_path();
-
-        if !db_path.exists() {
-            return Err(McpError::internal_error("No index found", None));
-        }
-
         let store =
             Store::open(&db_path).map_err(|e| McpError::internal_error(e.to_string(), None))?;
         let (project_id, project_name) = resolve_project(&store, params.project.as_deref())?;
@@ -399,19 +508,23 @@ impl SragMcpServer {
         &self,
         rmcp::handler::server::wrapper::Parameters(params): rmcp::handler::server::wrapper::Parameters<FtsSearchParams>,
     ) -> Result<CallToolResult, McpError> {
+        self.check_rate_limit()?;
         let config = Config::load().map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let _ = ensure_index_exists(&config).await?;
+
         let db_path = config.db_path();
-
-        if !db_path.exists() {
-            return Err(McpError::internal_error("No index found", None));
-        }
-
         let store =
             Store::open(&db_path).map_err(|e| McpError::internal_error(e.to_string(), None))?;
         let (project_id, project_name) = resolve_project(&store, params.project.as_deref())?;
 
         let results = store
-            .search_fts_project(&params.query, Some(project_id), params.limit)
+            .search_fts_project_paginated(
+                &params.query,
+                Some(project_id),
+                params.limit,
+                params.offset,
+            )
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         if results.is_empty() {
@@ -426,10 +539,122 @@ impl SragMcpServer {
             params.query, project_name
         );
         for (chunk_id, _score) in &results {
-            if let Ok(Some((chunk, file_path))) = store.get_chunk_by_id(*chunk_id) {
-                text.push_str(&format_chunk(&chunk, &file_path));
-                text.push('\n');
+            match store.get_chunk_by_id(*chunk_id) {
+                Ok(Some((chunk, file_path))) => {
+                    text.push_str(&format_chunk(&chunk, &file_path));
+                    text.push('\n');
+                }
+                Ok(None) => {
+                    tracing::warn!("chunk {} not found in database", chunk_id);
+                }
+                Err(e) => {
+                    tracing::warn!("failed to retrieve chunk {}: {}", chunk_id, e);
+                }
             }
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    #[tool(
+        description = "find all functions that call a specific function - useful for understanding dependencies and impact of changes"
+    )]
+    async fn find_callers(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(params): rmcp::handler::server::wrapper::Parameters<FindCallersParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.check_rate_limit()?;
+        let config = Config::load().map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let _ = ensure_index_exists(&config).await?;
+
+        let db_path = config.db_path();
+        let store =
+            Store::open(&db_path).map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let (project_id, project_name) = resolve_project(&store, params.project.as_deref())?;
+
+        let callers = store
+            .find_callers(project_id, &params.function_name)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        if callers.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(format!(
+                "no callers found for '{}' in project '{}'",
+                params.function_name, project_name
+            ))]));
+        }
+
+        let mut text = format!(
+            "functions that call '{}' in '{}':\n\n",
+            params.function_name, project_name
+        );
+        for entry in &callers {
+            let scope = entry
+                .scope
+                .as_ref()
+                .map(|s| format!("{}::", s))
+                .unwrap_or_default();
+            text.push_str(&format!(
+                "  {} {}{} in {}:{}-{}\n",
+                entry.definition_kind,
+                scope,
+                entry.definition_name,
+                entry.file_path,
+                entry.start_line,
+                entry.end_line
+            ));
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    #[tool(
+        description = "find all functions called by a specific function - useful for understanding what a function depends on"
+    )]
+    async fn find_callees(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(params): rmcp::handler::server::wrapper::Parameters<FindCalleesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.check_rate_limit()?;
+        let config = Config::load().map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let _ = ensure_index_exists(&config).await?;
+
+        let db_path = config.db_path();
+        let store =
+            Store::open(&db_path).map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let (project_id, project_name) = resolve_project(&store, params.project.as_deref())?;
+
+        let callees = store
+            .find_callees(project_id, &params.function_name)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        if callees.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(format!(
+                "no callees found for '{}' in project '{}' (function may not exist or makes no calls)",
+                params.function_name, project_name
+            ))]));
+        }
+
+        let mut text = format!(
+            "functions called by '{}' in '{}':\n\n",
+            params.function_name, project_name
+        );
+        for entry in &callees {
+            let scope = entry
+                .scope
+                .as_ref()
+                .map(|s| format!("{}::", s))
+                .unwrap_or_default();
+            text.push_str(&format!(
+                "  {} {}{} in {}:{}-{}\n",
+                entry.definition_kind,
+                scope,
+                entry.definition_name,
+                entry.file_path,
+                entry.start_line,
+                entry.end_line
+            ));
         }
 
         Ok(CallToolResult::success(vec![Content::text(text)]))

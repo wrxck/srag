@@ -235,3 +235,43 @@ pub struct ConversationTurn {
     pub sources: Option<String>,
     pub created_at: String,
 }
+
+/// a function or method definition for call graph tracking
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Definition {
+    pub id: Option<i64>,
+    pub chunk_id: i64,
+    pub file_id: i64,
+    pub name: String,
+    pub kind: String,
+    pub scope: Option<String>,
+    pub language: Language,
+    pub start_line: u32,
+    pub end_line: u32,
+    pub signature: Option<String>,
+}
+
+/// a function call reference for call graph tracking
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FunctionCall {
+    pub id: Option<i64>,
+    pub chunk_id: i64,
+    pub file_id: i64,
+    pub caller_name: Option<String>,
+    pub caller_scope: Option<String>,
+    pub callee_name: String,
+    pub line_number: u32,
+    pub language: Language,
+    pub callee_definition_id: Option<i64>,
+}
+
+/// result of a call graph query
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CallGraphEntry {
+    pub definition_name: String,
+    pub definition_kind: String,
+    pub file_path: String,
+    pub start_line: u32,
+    pub end_line: u32,
+    pub scope: Option<String>,
+}

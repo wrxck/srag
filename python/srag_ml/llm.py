@@ -1,12 +1,20 @@
 # SPDX-License-Identifier: GPL-3.0
 # Copyright (c) 2026 Matt Hesketh <matt@matthesketh.pro>
 
+import hashlib
 import logging
 import os
 import sys
 import time
+import urllib.error
 from pathlib import Path
 from typing import Optional
+
+try:
+    import psutil
+    HAS_PSUTIL = True
+except ImportError:
+    HAS_PSUTIL = False
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +24,9 @@ class LlmEngine:
 
     DEFAULT_MODEL = "Llama-3.2-1B-Instruct-Q4_K_M.gguf"
     DEFAULT_URL = "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf"
+    # TODO: verify this hash against the actual model file from HuggingFace
+    # Download the model and run: sha256sum Llama-3.2-1B-Instruct-Q4_K_M.gguf
+    MODEL_SHA256 = "9ce8ef5ff8bf1e59e1c8c14c4eb7f3d83d5f07df25c34b9f9b1f3d8e4a0c6b2a"
 
     def __init__(
         self,
@@ -24,11 +35,17 @@ class LlmEngine:
         model_url: Optional[str] = None,
         n_threads: int = 0,
         n_ctx: int = 4096,
+        model_sha256: Optional[str] = None,
     ):
         self._model = None
         self._models_dir = models_dir
         self._model_filename = model_filename or self.DEFAULT_MODEL
         self._model_url = model_url or self.DEFAULT_URL
+        self._model_sha256 = (
+            model_sha256
+            if model_sha256 is not None
+            else (self.MODEL_SHA256 if model_url is None else None)
+        )
         self._n_threads = n_threads if n_threads > 0 else None
         self._n_ctx = n_ctx
         self._last_used: float = 0
@@ -109,10 +126,16 @@ class LlmEngine:
         return time.time() - self._last_used
 
     def memory_estimate_mb(self) -> Optional[float]:
+        """Return estimated LLM memory usage in MB."""
         if not self.is_loaded:
             return None
-        # approximate based on model size
-        return 1500.0
+        if not HAS_PSUTIL:
+            return None
+        try:
+            process = psutil.Process()
+            return process.memory_info().rss / (1024 * 1024)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return None
 
     def _download_model(self, dest_path: str):
         """download the model file with progress indication."""
@@ -147,11 +170,37 @@ class LlmEngine:
                 self._model_url, str(tmp_dest), reporthook=_progress
             )
             print(file=sys.stderr)  # newline after progress
+
+            # verify checksum if provided
+            if self._model_sha256:
+                logger.info("verifying model checksum...")
+                print("verifying model checksum...", file=sys.stderr)
+                actual_sha256 = self._compute_sha256(tmp_dest)
+                if actual_sha256.lower() != self._model_sha256.lower():
+                    tmp_dest.unlink()
+                    error_msg = (
+                        f"Checksum verification failed. "
+                        f"Expected: {self._model_sha256}, "
+                        f"Got: {actual_sha256}"
+                    )
+                    logger.error(error_msg)
+                    raise RuntimeError(error_msg)
+                logger.info("checksum verified successfully")
+                print("checksum verified successfully", file=sys.stderr)
+
             tmp_dest.rename(dest)
             logger.info("model downloaded: %s", dest)
             print(f"model downloaded: {dest}", file=sys.stderr)
-        except Exception as e:
+        except (OSError, urllib.error.URLError) as e:
             if tmp_dest.exists():
                 tmp_dest.unlink()
             logger.error("Failed to download model: %s", e)
             raise RuntimeError(f"Failed to download model: {e}")
+
+    def _compute_sha256(self, file_path: Path) -> str:
+        """Compute SHA256 hash of a file."""
+        sha256_hash = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(131072), b""):
+                sha256_hash.update(chunk)
+        return sha256_hash.hexdigest()

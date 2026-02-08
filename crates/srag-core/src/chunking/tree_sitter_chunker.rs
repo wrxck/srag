@@ -5,6 +5,9 @@ use srag_common::types::{Chunk, Language};
 use srag_common::Result;
 use tree_sitter::Parser;
 
+/// minimum chunk size in characters to filter out trivial chunks
+const MIN_CHUNK_SIZE: usize = 50;
+
 pub fn chunk_with_tree_sitter(text: &str, language: Language) -> Result<Vec<Chunk>> {
     let Some(ts_language) = get_tree_sitter_language(language) else {
         return Err(srag_common::Error::Chunking(format!(
@@ -48,7 +51,7 @@ fn collect_nodes(
         let end = node.end_position();
         let content = &source[node.start_byte()..node.end_byte()];
 
-        if !content.trim().is_empty() && content.len() > 10 {
+        if !content.trim().is_empty() && content.len() >= MIN_CHUNK_SIZE {
             let symbol = extract_symbol_name(node, source);
             chunks.push(Chunk {
                 id: None,
@@ -82,7 +85,7 @@ fn collect_top_level_chunks(
         let end = child.end_position();
         let content = &source[child.start_byte()..child.end_byte()];
 
-        if !content.trim().is_empty() && content.len() > 10 {
+        if !content.trim().is_empty() && content.len() >= MIN_CHUNK_SIZE {
             chunks.push(Chunk {
                 id: None,
                 file_id: 0,
@@ -98,10 +101,26 @@ fn collect_top_level_chunks(
     }
 }
 
+/// extract symbol name from a node, recursively searching for identifiers.
+/// this handles decorated definitions, export statements, and other nested structures.
 fn extract_symbol_name(node: tree_sitter::Node, source: &str) -> Option<String> {
+    extract_symbol_name_recursive(node, source, 0)
+}
+
+fn extract_symbol_name_recursive(
+    node: tree_sitter::Node,
+    source: &str,
+    depth: usize,
+) -> Option<String> {
+    // limit recursion depth to prevent infinite loops
+    if depth > 10 {
+        return None;
+    }
+
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         match child.kind() {
+            // direct identifier nodes
             "identifier"
             | "name"
             | "type_identifier"
@@ -109,18 +128,44 @@ fn extract_symbol_name(node: tree_sitter::Node, source: &str) -> Option<String> 
             | "field_identifier" => {
                 return Some(source[child.start_byte()..child.end_byte()].to_string());
             }
+            // nodes that contain the actual definition (recurse into them)
+            "function_definition"
+            | "class_definition"
+            | "function_declaration"
+            | "class_declaration"
+            | "method_definition"
+            | "method_declaration"
+            | "variable_declarator"
+            | "lexical_declaration"
+            | "variable_declaration"
+            | "assignment_expression"
+            | "pair" => {
+                if let Some(name) = extract_symbol_name_recursive(child, source, depth + 1) {
+                    return Some(name);
+                }
+            }
             _ => {}
         }
     }
+
+    // if no identifier found in direct children, try recursively in all children
+    let mut cursor2 = node.walk();
+    for child in node.children(&mut cursor2) {
+        if let Some(name) = extract_symbol_name_recursive(child, source, depth + 1) {
+            return Some(name);
+        }
+    }
+
     None
 }
 
-fn get_tree_sitter_language(lang: Language) -> Option<tree_sitter::Language> {
+pub fn get_tree_sitter_language(lang: Language) -> Option<tree_sitter::Language> {
     match lang {
         Language::Rust => Some(tree_sitter_rust::LANGUAGE.into()),
         Language::Python => Some(tree_sitter_python::LANGUAGE.into()),
-        Language::JavaScript => Some(tree_sitter_javascript::LANGUAGE.into()),
-        Language::TypeScript => Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
+        // use TSX grammar for JavaScript to support JSX syntax
+        Language::JavaScript => Some(tree_sitter_typescript::LANGUAGE_TSX.into()),
+        Language::TypeScript => Some(tree_sitter_typescript::LANGUAGE_TSX.into()),
         Language::Go => Some(tree_sitter_go::LANGUAGE.into()),
         Language::C => Some(tree_sitter_c::LANGUAGE.into()),
         Language::Cpp => Some(tree_sitter_cpp::LANGUAGE.into()),
@@ -187,7 +232,7 @@ mod tests {
 
     #[test]
     fn test_rust_function() {
-        let code = "fn hello() {\n    println!(\"hi\");\n}";
+        let code = "fn hello() {\n    println!(\"hello world from rust\");\n    let x = 42;\n}";
         let chunks = chunk_with_tree_sitter(code, Language::Rust).unwrap();
         assert!(!chunks.is_empty());
         assert!(chunks.iter().any(|c| c.symbol == Some("hello".to_string())));
@@ -195,7 +240,7 @@ mod tests {
 
     #[test]
     fn test_rust_struct() {
-        let code = "struct Point {\n    x: i32,\n    y: i32,\n}";
+        let code = "struct Point {\n    x: i32,\n    y: i32,\n    z: i32,\n    w: i32,\n}";
         let chunks = chunk_with_tree_sitter(code, Language::Rust).unwrap();
         assert!(!chunks.is_empty());
         assert!(chunks.iter().any(|c| c.symbol == Some("Point".to_string())));
@@ -203,14 +248,14 @@ mod tests {
 
     #[test]
     fn test_rust_impl() {
-        let code = "impl Point {\n    fn new() -> Self { Self { x: 0, y: 0 } }\n}";
+        let code = "impl Point {\n    fn new() -> Self { Self { x: 0, y: 0, z: 0, w: 0 } }\n}";
         let chunks = chunk_with_tree_sitter(code, Language::Rust).unwrap();
         assert!(!chunks.is_empty());
     }
 
     #[test]
     fn test_python_function() {
-        let code = "def greet(name):\n    print(f'Hello {name}')";
+        let code = "def greet(name):\n    print(f'Hello {name}')\n    return name.upper()";
         let chunks = chunk_with_tree_sitter(code, Language::Python).unwrap();
         assert!(!chunks.is_empty());
         assert!(chunks.iter().any(|c| c.symbol == Some("greet".to_string())));
@@ -218,21 +263,48 @@ mod tests {
 
     #[test]
     fn test_python_class() {
-        let code = "class MyClass:\n    def __init__(self):\n        pass";
+        let code = "class MyClass:\n    def __init__(self):\n        self.value = 42\n        pass";
         let chunks = chunk_with_tree_sitter(code, Language::Python).unwrap();
         assert!(!chunks.is_empty());
     }
 
     #[test]
+    fn test_python_decorated_function() {
+        let code = "@decorator\ndef decorated_func(arg1, arg2):\n    return arg1 + arg2 + 100";
+        let chunks = chunk_with_tree_sitter(code, Language::Python).unwrap();
+        assert!(!chunks.is_empty());
+        assert!(chunks
+            .iter()
+            .any(|c| c.symbol == Some("decorated_func".to_string())));
+    }
+
+    #[test]
     fn test_javascript_function() {
-        let code = "function hello() {\n    console.log('hi');\n}";
+        let code = "function hello() {\n    console.log('hello world');\n    return 42;\n}";
         let chunks = chunk_with_tree_sitter(code, Language::JavaScript).unwrap();
         assert!(!chunks.is_empty());
     }
 
     #[test]
+    fn test_javascript_jsx() {
+        let code = "function App() {\n    return <div className=\"app\">Hello World</div>;\n}";
+        let chunks = chunk_with_tree_sitter(code, Language::JavaScript).unwrap();
+        assert!(!chunks.is_empty());
+    }
+
+    #[test]
+    fn test_javascript_export() {
+        let code = "export function exportedFunc(param) {\n    return param * 2 + 100;\n}";
+        let chunks = chunk_with_tree_sitter(code, Language::JavaScript).unwrap();
+        assert!(!chunks.is_empty());
+        assert!(chunks
+            .iter()
+            .any(|c| c.symbol == Some("exportedFunc".to_string())));
+    }
+
+    #[test]
     fn test_go_function() {
-        let code = "func main() {\n    fmt.Println(\"hi\")\n}";
+        let code = "func main() {\n    fmt.Println(\"hello world\")\n    x := 42\n}";
         let chunks = chunk_with_tree_sitter(code, Language::Go).unwrap();
         assert!(!chunks.is_empty());
     }
@@ -241,7 +313,16 @@ mod tests {
     fn test_minimum_chunk_size() {
         let code = "fn a() {}";
         let chunks = chunk_with_tree_sitter(code, Language::Rust).unwrap();
-        assert!(chunks.is_empty() || chunks[0].content.len() > 10);
+        // small chunks should be filtered out
+        assert!(chunks.is_empty());
+    }
+
+    #[test]
+    fn test_minimum_chunk_size_threshold() {
+        let code = "fn test_function() {\n    let value = 123456789;\n}";
+        let chunks = chunk_with_tree_sitter(code, Language::Rust).unwrap();
+        // should pass if >= 50 characters
+        assert!(chunks.is_empty() || chunks[0].content.len() >= MIN_CHUNK_SIZE);
     }
 
     #[test]
@@ -252,7 +333,7 @@ mod tests {
 
     #[test]
     fn test_line_numbers() {
-        let code = "\n\nfn test() {\n    // body\n}";
+        let code = "\n\nfn test() {\n    // body with enough content to pass\n    let x = 42;\n}";
         let chunks = chunk_with_tree_sitter(code, Language::Rust).unwrap();
         if !chunks.is_empty() {
             assert!(chunks[0].start_line >= 3);
@@ -261,7 +342,7 @@ mod tests {
 
     #[test]
     fn test_symbol_kind_preserved() {
-        let code = "fn test() { let x = 1; }";
+        let code = "fn test() { let x = 1; let y = 2; let z = 3; }";
         let chunks = chunk_with_tree_sitter(code, Language::Rust).unwrap();
         if !chunks.is_empty() {
             assert!(chunks[0].symbol_kind.is_some());

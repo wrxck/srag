@@ -68,10 +68,10 @@ class TestMlServer:
     @patch("srag_ml.server.Reranker")
     @patch("srag_ml.server.LlmEngine")
     def test_handle_embed_max_batch(self, mock_llm, mock_reranker, mock_embedder):
-        from srag_ml.server import MlServer
+        from srag_ml.server import MlServer, MAX_EMBED_BATCH_SIZE
 
         server = MlServer()
-        with pytest.raises(ValueError, match="Max 64"):
+        with pytest.raises(ValueError, match=f"maximum of {MAX_EMBED_BATCH_SIZE}"):
             server._handle_embed({"texts": ["t"] * 65})
 
     @patch("srag_ml.server.Embedder")

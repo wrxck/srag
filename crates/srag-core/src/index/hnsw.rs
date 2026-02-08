@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0
 // Copyright (c) 2026 Matt Hesketh <matt@matthesketh.pro>
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use hnsw_rs::anndists::dist::distances::DistCosine;
 use hnsw_rs::api::AnnT;
@@ -17,16 +18,30 @@ const MAX_LAYER: usize = 16;
 const EF_CONSTRUCTION: usize = 200;
 const DEFAULT_MAX_ELEMENTS: usize = 100_000;
 
+// global cached vector index for mcp queries
+static CACHED_INDEX: OnceLock<Mutex<Option<CachedVectorIndex>>> = OnceLock::new();
+
+struct CachedVectorIndex {
+    index: VectorIndex,
+    vectors_dir: PathBuf,
+}
+
 /// wraps hnsw_rs for vector similarity search.
 /// persistence is handled by dump/reload cycle.
-/// we leak the HnswIo loader to get 'static lifetime for loaded indices.
+/// the HnswIo loader is stored in the struct to properly manage its lifetime
+/// without leaking memory.
 pub struct VectorIndex {
+    // IMPORTANT: field order matters for drop safety.
+    // Rust drops fields in declaration order, so `hnsw` is dropped before `_loader`.
+    // This is required because `hnsw` holds references into `_loader`'s memory-mapped data.
     hnsw: Hnsw<'static, f32, DistCosine>,
     dimension: usize,
     next_id: usize,
     max_elements: usize,
     capacity_warned: bool,
     loaded_from_disk: bool,
+    // _loader MUST be the last field so it is dropped last, after hnsw releases its references.
+    _loader: Option<Box<HnswIo>>,
 }
 
 impl VectorIndex {
@@ -45,6 +60,7 @@ impl VectorIndex {
             max_elements,
             capacity_warned: false,
             loaded_from_disk: false,
+            _loader: None,
         })
     }
 
@@ -69,9 +85,17 @@ impl VectorIndex {
 
     fn load_from_disk(path: &Path, dimension: usize) -> Result<Self> {
         let loader = Box::new(HnswIo::new(path, BASENAME));
-        let loader: &'static mut HnswIo = Box::leak(loader);
 
-        let hnsw: Hnsw<'static, f32, DistCosine> = loader
+        let loader_ptr = Box::into_raw(loader);
+
+        // SAFETY: loader_ptr is valid because we just created it from Box::into_raw.
+        // The HNSW index borrows from the loader's memory-mapped data, so the loader
+        // must outlive the HNSW index. We ensure this by:
+        // 1. Storing the loader as the LAST field in VectorIndex (dropped after hnsw).
+        // 2. Reconstructing the Box below so it is properly freed when the struct drops.
+        let loader_ref: &'static mut HnswIo = unsafe { &mut *loader_ptr };
+
+        let hnsw: Hnsw<'static, f32, DistCosine> = loader_ref
             .load_hnsw()
             .map_err(|e| Error::Index(format!("Failed to load HNSW: {}", e)))?;
 
@@ -84,6 +108,8 @@ impl VectorIndex {
             max_elements: DEFAULT_MAX_ELEMENTS.max(nb_point),
             capacity_warned: false,
             loaded_from_disk: true,
+            // SAFETY: loader_ptr was created from Box::into_raw above; reconstruct to free on drop.
+            _loader: Some(unsafe { Box::from_raw(loader_ptr) }),
         })
     }
 
@@ -166,6 +192,52 @@ pub fn rebuild_hnsw_from_db(store: &Store, index: &mut VectorIndex) -> Result<()
     store.for_each_embedding(dim, |id, vector| index.insert(id as usize, &vector))?;
     tracing::info!("hnsw rebuild complete ({} points)", index.len());
     Ok(())
+}
+
+/// search using the cached index, avoiding rebuilds on each mcp request
+pub fn search_cached(
+    vectors_dir: &Path,
+    dimension: usize,
+    store: &Store,
+    query: &[f32],
+    k: usize,
+    ef: usize,
+) -> Result<Vec<(usize, f32)>> {
+    let mutex = CACHED_INDEX.get_or_init(|| Mutex::new(None));
+    let mut guard = mutex
+        .lock()
+        .map_err(|e| Error::Index(format!("Failed to acquire index lock: {}", e)))?;
+
+    let needs_init = match &*guard {
+        None => true,
+        Some(cached) => cached.vectors_dir != vectors_dir,
+    };
+
+    if needs_init {
+        tracing::debug!("initialising cached vector index");
+        let mut index = VectorIndex::open(vectors_dir, dimension)?;
+        rebuild_hnsw_from_db(store, &mut index)?;
+        *guard = Some(CachedVectorIndex {
+            index,
+            vectors_dir: vectors_dir.to_path_buf(),
+        });
+    }
+
+    let cached = guard
+        .as_ref()
+        .ok_or_else(|| Error::Index("Cached index not initialised".to_string()))?;
+    cached.index.search(query, k, ef)
+}
+
+/// invalidate the cached index after modifying content.
+/// NOTE: callers must call invalidate_cache() after indexing to refresh search results
+pub fn invalidate_cache() {
+    if let Some(mutex) = CACHED_INDEX.get() {
+        if let Ok(mut guard) = mutex.lock() {
+            *guard = None;
+            tracing::debug!("invalidated cached vector index");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -265,5 +337,10 @@ mod tests {
 
         index.insert(10, &v).unwrap();
         assert_eq!(index.next_id(), 11);
+    }
+
+    #[test]
+    fn test_invalidate_cache() {
+        invalidate_cache();
     }
 }

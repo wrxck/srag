@@ -50,27 +50,12 @@ pub fn ensure_ml_service_running(config: &Config) -> Result<()> {
     let runtime_dir = Config::runtime_dir();
     std::fs::create_dir_all(&runtime_dir)?;
 
-    // generate auth token and write to file with restrictive permissions
+    // generate auth token and write to file with restrictive permissions and timestamp
     let token = generate_auth_token();
     let token_path = Config::token_file_path();
-    {
-        use std::io::Write;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            let mut f = std::fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .mode(0o600)
-                .open(&token_path)?;
-            f.write_all(token.as_bytes())?;
-        }
-        #[cfg(not(unix))]
-        {
-            std::fs::write(&token_path, &token)?;
-        }
-    }
+    write_token_with_timestamp(&token_path, &token)?;
+    // record the service start time for token validation
+    let _ = get_service_start_time();
 
     let python = python_executable(config);
     let python_pkg = find_python_package()?;
@@ -175,42 +160,74 @@ pub fn stop_ml_service() -> Result<()> {
 }
 
 fn generate_auth_token() -> String {
+    use rand::RngCore;
     let mut bytes = [0u8; 32];
-    #[cfg(unix)]
-    {
-        use std::io::Read;
-        if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
-            let _ = f.read_exact(&mut bytes);
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        // fallback: hash multiple RandomState instances for some entropy
-        use std::collections::hash_map::RandomState;
-        use std::hash::{BuildHasher, Hasher};
-        for i in 0..4 {
-            let s = RandomState::new();
-            let mut h = s.build_hasher();
-            h.write_usize(i);
-            h.write_u128(
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_nanos(),
-            );
-            let val = h.finish();
-            bytes[i * 8..(i + 1) * 8].copy_from_slice(&val.to_le_bytes());
-        }
-    }
+    rand::thread_rng().fill_bytes(&mut bytes);
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
-/// read the auth token from the token file.
+fn write_token_with_timestamp(token_path: &std::path::Path, token: &str) -> Result<()> {
+    use std::io::Write;
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let content = format!("{}:{}", timestamp, token);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(token_path)?;
+        f.write_all(content.as_bytes())?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(token_path, &content)?;
+    }
+    Ok(())
+}
+
+static SERVICE_START_TIME: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+
+fn get_service_start_time() -> u64 {
+    *SERVICE_START_TIME.get_or_init(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    })
+}
+
+/// read the auth token from the token file and validate its timestamp.
+/// rejects tokens older than the service start time to prevent replay attacks.
 pub fn read_auth_token() -> Result<String> {
     let token_path = Config::token_file_path();
-    let token = std::fs::read_to_string(&token_path)
-        .map_err(|e| Error::Ipc(format!("Failed to read auth token: {}", e)))?;
-    Ok(token.trim().to_string())
+    let content = std::fs::read_to_string(&token_path)
+        .map_err(|e| Error::Ipc(format!("failed to read auth token: {}", e)))?;
+    let content = content.trim();
+
+    // parse timestamp:token format
+    if let Some((timestamp_str, token)) = content.split_once(':') {
+        if let Ok(token_timestamp) = timestamp_str.parse::<u64>() {
+            let service_start = get_service_start_time();
+            // reject tokens created before the service started (potential replay attack)
+            if token_timestamp < service_start {
+                return Err(Error::Ipc(
+                    "auth token is stale (created before service start)".into(),
+                ));
+            }
+            return Ok(token.to_string());
+        }
+    }
+
+    // fallback for legacy tokens without timestamp (treat as valid but log warning)
+    tracing::warn!("auth token file missing timestamp, accepting for backwards compatibility");
+    Ok(content.to_string())
 }
 
 fn find_python_package() -> Result<PathBuf> {
