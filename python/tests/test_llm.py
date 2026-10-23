@@ -79,13 +79,17 @@ class TestLlmEngine:
         assert engine.memory_estimate_mb() is None
 
     def test_memory_estimate_when_loaded(self):
+        from srag_ml import llm
         from srag_ml.llm import LlmEngine
 
         engine = LlmEngine()
         engine._model = MagicMock()
-        mem = engine.memory_estimate_mb()
-        assert mem is not None
-        assert mem > 0
+        # ci has no psutil, so fake it rather than depend on the runner's packages
+        fake_psutil = MagicMock()
+        fake_psutil.Process.return_value.memory_info.return_value.rss = 256 * 1024 * 1024
+        with patch.object(llm, "HAS_PSUTIL", True), patch.object(llm, "psutil", fake_psutil, create=True):
+            mem = engine.memory_estimate_mb()
+        assert mem == 256
 
     def test_n_threads_zero_becomes_none(self):
         from srag_ml.llm import LlmEngine

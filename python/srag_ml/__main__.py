@@ -2,6 +2,7 @@
 # Copyright (c) 2026 Matt Hesketh <matt@matthesketh.pro>
 
 import argparse
+import os
 import sys
 
 from .server import MlServer
@@ -33,7 +34,7 @@ def main():
     parser.add_argument(
         "--auth-token",
         default=None,
-        help="Auth token for request validation",
+        help="Auth token for request validation (prefer the SRAG_AUTH_TOKEN env var: argv is world-readable)",
     )
     parser.add_argument(
         "--model-filename",
@@ -91,7 +92,7 @@ def main():
         port=args.port,
         port_file=args.port_file,
         models_dir=args.models_dir,
-        auth_token=args.auth_token,
+        auth_token=args.auth_token or os.environ.get("SRAG_AUTH_TOKEN"),
         model_filename=args.model_filename,
         model_url=args.model_url,
         llm_threads=args.llm_threads,
