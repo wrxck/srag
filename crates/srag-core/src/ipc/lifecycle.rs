@@ -71,8 +71,8 @@ pub fn ensure_ml_service_running(config: &Config) -> Result<()> {
         .arg(&port_file)
         .arg("--models-dir")
         .arg(config.models_dir())
-        .arg("--auth-token")
-        .arg(&token)
+        // env, not argv: any local user can read another process's argv from /proc.
+        .env("SRAG_AUTH_TOKEN", &token)
         .arg("--model-filename")
         .arg(&config.llm.model_filename)
         .arg("--model-url")
