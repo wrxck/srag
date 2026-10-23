@@ -58,15 +58,8 @@ fn extract_callee_name(node: Node, source: &str, language: Language) -> Option<S
                     return extract_method_name(child, source);
                 }
             }
-            Language::Java => {
-                if child_kind == "identifier" {
-                    return Some(source[child.start_byte()..child.end_byte()].to_string());
-                }
-            }
-            Language::Ruby => {
-                if child_kind == "identifier" {
-                    return Some(source[child.start_byte()..child.end_byte()].to_string());
-                }
+            Language::Java | Language::Ruby if child_kind == "identifier" => {
+                return Some(source[child.start_byte()..child.end_byte()].to_string());
             }
             _ => {}
         }
